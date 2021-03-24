@@ -3,15 +3,6 @@
 ##  Desc:  Install and update Android SDK and tools
 ################################################################################
 
-# Download the latest command line tools so that we can accept all of the licenses.
-# See https://developer.android.com/studio/#command-tools
-Invoke-WebRequest -UseBasicParsing -Uri "https://dl.google.com/android/repository/sdk-tools-windows-4333796.zip" -OutFile android-sdk-tools.zip
-
-# Don't replace the one that VS installs as it seems to break things.
-Expand-Archive -Path android-sdk-tools.zip -DestinationPath android-sdk -Force
-
-$sdk = Get-Item -Path .\android-sdk
-
 # Install the standard Android SDK licenses. In the past, there wasn't a better way to do this,
 # so we are base64-encoding a zip of the licenses directory from another installation.
 # To create this base64 string, create a zip file that contains nothing but a 'licenses' folder,
@@ -28,131 +19,114 @@ $sdk = Get-Item -Path .\android-sdk
 $base64Content = "UEsDBBQAAAAAAKJeN06amkPzKgAAACoAAAAhAAAAbGljZW5zZXMvYW5kcm9pZC1nb29nbGV0di1saWNlbnNlDQpmYzk0NmU4ZjIzMWYzZTMxNTliZjBiN2M2NTVjOTI0Y2IyZTM4MzMwUEsDBBQAAAAIAKBrN05E+YSqQwAAAFQAAAAcAAAAbGljZW5zZXMvYW5kcm9pZC1zZGstbGljZW5zZQXByREAIQgEwP9WmYsjhxgOKJN/CNs9vmdOQ2zdRw2dxQnWjqQ/3oIgXQM9vqUiwkiX8ljWea4ZlCF3xTo1pz6w+wdQSwMEFAAAAAAAxV43TpECY7AqAAAAKgAAACQAAABsaWNlbnNlcy9hbmRyb2lkLXNkay1wcmV2aWV3LWxpY2Vuc2UNCjUwNDY2N2Y0YzBkZTdhZjFhMDZkZTlmNGIxNzI3Yjg0MzUxZjI5MTBQSwMEFAAAAAAAzF43TpOr0CgqAAAAKgAAABsAAABsaWNlbnNlcy9nb29nbGUtZ2RrLWxpY2Vuc2UNCjMzYjZhMmI2NDYwN2YxMWI3NTlmMzIwZWY5ZGZmNGFlNWM0N2Q5N2FQSwMEFAAAAAAAz143TqxN4xEqAAAAKgAAACQAAABsaWNlbnNlcy9pbnRlbC1hbmRyb2lkLWV4dHJhLWxpY2Vuc2UNCmQ5NzVmNzUxNjk4YTc3YjY2MmYxMjU0ZGRiZWVkMzkwMWU5NzZmNWFQSwMEFAAAAAAA0l43Tu2ee/8qAAAAKgAAACYAAABsaWNlbnNlcy9taXBzLWFuZHJvaWQtc3lzaW1hZ2UtbGljZW5zZQ0KNjNkNzAzZjU2OTJmZDg5MWQ1YWNhY2ZiZDhlMDlmNDBmYzk3NjEwNVBLAQIUABQAAAAAAKJeN06amkPzKgAAACoAAAAhAAAAAAAAAAEAIAAAAAAAAABsaWNlbnNlcy9hbmRyb2lkLWdvb2dsZXR2LWxpY2Vuc2VQSwECFAAUAAAACACgazdORPmEqkMAAABUAAAAHAAAAAAAAAABACAAAABpAAAAbGljZW5zZXMvYW5kcm9pZC1zZGstbGljZW5zZVBLAQIUABQAAAAAAMVeN06RAmOwKgAAACoAAAAkAAAAAAAAAAEAIAAAAOYAAABsaWNlbnNlcy9hbmRyb2lkLXNkay1wcmV2aWV3LWxpY2Vuc2VQSwECFAAUAAAAAADMXjdOk6vQKCoAAAAqAAAAGwAAAAAAAAABACAAAABSAQAAbGljZW5zZXMvZ29vZ2xlLWdkay1saWNlbnNlUEsBAhQAFAAAAAAAz143TqxN4xEqAAAAKgAAACQAAAAAAAAAAQAgAAAAtQEAAGxpY2Vuc2VzL2ludGVsLWFuZHJvaWQtZXh0cmEtbGljZW5zZVBLAQIUABQAAAAAANJeN07tnnv/KgAAACoAAAAmAAAAAAAAAAEAIAAAACECAABsaWNlbnNlcy9taXBzLWFuZHJvaWQtc3lzaW1hZ2UtbGljZW5zZVBLBQYAAAAABgAGANoBAACPAgAAAAA="
 $content = [System.Convert]::FromBase64String($base64Content)
 Set-Content -Path .\android-sdk-licenses.zip -Value $content -Encoding Byte
-Expand-Archive -Path .\android-sdk-licenses.zip -DestinationPath 'C:\Program Files (x86)\Android\android-sdk' -Force
-
+$sdkInstallRoot = "C:\Program Files (x86)\Android\android-sdk"
+$sdkRoot = "C:\Android\android-sdk"
+Expand-Archive -Path .\android-sdk-licenses.zip -DestinationPath $sdkInstallRoot -Force
+New-Item -Path "C:\Android" -ItemType Directory
+New-Item -Path "$sdkRoot" -ItemType SymbolicLink -Value "$sdkInstallRoot"
 
 # run the updates.
 # keep newer versions in descending order
 
-$sdk_root = "C:\Program Files (x86)\Android\android-sdk"
+# Get android content from toolset
+$androidToolset = (Get-ToolsetContent).android
+$sdkManager = "$sdkRoot\tools\bin\sdkmanager.bat"
 
-# The NDK is installed by Visual Studio at this location:
-$ndk_root = "C:\Microsoft\AndroidNDK64\"
+& $sdkManager --sdk_root=$sdkRoot "platform-tools"
 
-if(Test-Path $ndk_root){
+# get packages info
+$androidPackages = Get-AndroidPackages -AndroidSDKManagerPath $sdkManager
 
-    $androidNDKs = Get-ChildItem -Path $ndk_root | Sort-Object -Property Name -Descending | Select-Object -First 1
-    $latestAndroidNDK = $androidNDKs.FullName;
+# platforms
+[int]$platformMinVersion = $androidToolset.platform_min_version
+$platformListByVersion = Get-AndroidPackagesByVersion -AndroidPackages $androidPackages `
+                -PrefixPackageName "platforms;" `
+                -MinimumVersion $platformMinVersion `
+                -Delimiter "-" `
+                -Index 1
+$platformListByName = Get-AndroidPackagesByName -AndroidPackages $androidPackages `
+                -PrefixPackageName "platforms;" | Where-Object {$_ -match "-\D+$"}
+$platformList = $platformListByVersion + $platformListByName
 
-    setx ANDROID_HOME $sdk_root /M
-    setx ANDROID_NDK_HOME $latestAndroidNDK /M
-    setx ANDROID_NDK_PATH $latestAndroidNDK /M
-}
-else {
-    Write-Host "NDK is not installed at path $ndk_root"
+# build-tools
+[version]$buildToolsMinVersion = $androidToolset.build_tools_min_version
+$buildToolsList = Get-AndroidPackagesByVersion -AndroidPackages $androidPackages `
+                  -PrefixPackageName "build-tools;" `
+                  -MinimumVersion $buildToolsMinVersion `
+                  -Delimiter ";" `
+                  -Index 1
+
+Install-AndroidSDKPackages -AndroidSDKManagerPath $sdkManager `
+                          -AndroidSDKRootPath $sdkRoot `
+                          -AndroidPackages $platformList
+
+Install-AndroidSDKPackages -AndroidSDKManagerPath $sdkManager `
+                          -AndroidSDKRootPath $sdkRoot `
+                          -AndroidPackages $buildToolsList
+
+Install-AndroidSDKPackages -AndroidSDKManagerPath $sdkManager `
+                          -AndroidSDKRootPath $sdkRoot `
+                          -AndroidPackages $androidToolset.extra_list `
+                          -PrefixPackageName "extras;"
+
+Install-AndroidSDKPackages -AndroidSDKManagerPath $sdkManager `
+                          -AndroidSDKRootPath $sdkRoot `
+                          -AndroidPackages $androidToolset.addon_list `
+                          -PrefixPackageName "add-ons;"
+
+Install-AndroidSDKPackages -AndroidSDKManagerPath $sdkManager `
+                          -AndroidSDKRootPath $sdkRoot `
+                          -AndroidPackages $androidToolset.additional_tools
+
+# NDKs
+$ndkLTSMajorVersion = $androidToolset.ndk.lts
+$ndkLatestMajorVersion = $androidToolset.ndk.latest
+
+$ndkLTSPackageName = Get-AndroidPackagesByName -AndroidPackages $androidPackages `
+                -PrefixPackageName "ndk;$ndkLTSMajorVersion" `
+                | Sort-Object -Unique `
+                | Select-Object -Last 1
+
+$ndkLatestPackageName = Get-AndroidPackagesByName -AndroidPackages $androidPackages `
+                -PrefixPackageName "ndk;$ndkLatestMajorVersion" `
+                | Sort-Object -Unique `
+                | Select-Object -Last 1
+
+$androidNDKs = @($ndkLTSPackageName, $ndkLatestPackageName)
+
+
+Install-AndroidSDKPackages -AndroidSDKManagerPath $sdkManager `
+                          -AndroidSDKRootPath $sdkRoot `
+                          -AndroidPackages $androidNDKs
+
+$ndkLTSVersion = $ndkLTSPackageName.Split(';')[1]
+$ndkLatestVersion = $ndkLatestPackageName.Split(';')[1]
+
+# Android NDK root path.
+$ndkRoot = "$sdkRoot\ndk-bundle"
+# This changes were added due to incompatibility with android ndk-bundle (ndk;22.0.7026061).
+# Link issue virtual-environments: https://github.com/actions/virtual-environments/issues/2481
+# Link issue xamarin-android: https://github.com/xamarin/xamarin-android/issues/5526
+New-Item -Path $ndkRoot -ItemType SymbolicLink -Value "$sdkRoot\ndk\$ndkLTSVersion"
+
+if (Test-Path $ndkRoot) {
+    setx ANDROID_HOME $sdkRoot /M
+    setx ANDROID_SDK_ROOT $sdkRoot /M
+    setx ANDROID_NDK_HOME $ndkRoot /M
+    setx ANDROID_NDK_PATH $ndkRoot /M
+    setx ANDROID_NDK_ROOT $ndkRoot /M
+    (Get-Content -Encoding UTF8 "${ndkRoot}\ndk-build.cmd").replace('%~dp0\build\ndk-build.cmd','"%~dp0\build\ndk-build.cmd"')|Set-Content -Encoding UTF8 "${ndkRoot}\ndk-build.cmd"
+} else {
+    Write-Host "LTS NDK $ndkLTSVersion is not installed at path $ndkRoot"
     exit 1
 }
 
-
-Push-Location -Path $sdk.FullName
-
-& '.\tools\bin\sdkmanager.bat' --sdk_root=$sdk_root `
-    "platform-tools" `
-    "platforms;android-29" `
-    "platforms;android-28" `
-    "platforms;android-27" `
-    "platforms;android-26" `
-    "platforms;android-25" `
-    "platforms;android-24" `
-    "platforms;android-23" `
-    "platforms;android-22" `
-    "platforms;android-21" `
-    "platforms;android-19" `
-    "build-tools;29.0.3" `
-    "build-tools;29.0.2" `
-    "build-tools;29.0.0" `
-    "build-tools;28.0.3" `
-    "build-tools;28.0.2" `
-    "build-tools;28.0.1" `
-    "build-tools;28.0.0" `
-    "build-tools;27.0.3" `
-    "build-tools;27.0.2" `
-    "build-tools;27.0.1" `
-    "build-tools;27.0.0" `
-    "build-tools;26.0.3" `
-    "build-tools;26.0.2" `
-    "build-tools;26.0.1" `
-    "build-tools;26.0.0" `
-    "build-tools;25.0.3" `
-    "build-tools;25.0.2" `
-    "build-tools;25.0.1" `
-    "build-tools;25.0.0" `
-    "build-tools;24.0.3" `
-    "build-tools;24.0.2" `
-    "build-tools;24.0.1" `
-    "build-tools;24.0.0" `
-    "build-tools;23.0.3" `
-    "build-tools;23.0.2" `
-    "build-tools;23.0.1" `
-    "build-tools;22.0.1" `
-    "build-tools;21.1.2" `
-    "build-tools;20.0.0" `
-    "build-tools;19.1.0" `
-    "extras;android;m2repository" `
-    "extras;google;m2repository" `
-    "extras;google;google_play_services" `
-    "extras;m2repository;com;android;support;constraint;constraint-layout-solver;1.0.2" `
-    "extras;m2repository;com;android;support;constraint;constraint-layout-solver;1.0.1" `
-    "extras;m2repository;com;android;support;constraint;constraint-layout;1.0.2" `
-    "extras;m2repository;com;android;support;constraint;constraint-layout;1.0.1" `
-    "add-ons;addon-google_apis-google-24" `
-    "add-ons;addon-google_apis-google-23" `
-    "add-ons;addon-google_apis-google-22" `
-    "add-ons;addon-google_apis-google-21" `
-    "cmake;3.6.4111459" `
-    "cmake;3.10.2.4988404" `
-    "patcher;v4"
-
-Pop-Location
-
-
-# Adding description of the software to Markdown
-$Header = @"
-
-## Android SDK Build Tools
-
-"@
-
-Add-ContentToMarkdown -Content $Header
-
-$BuildTools =(Get-ChildItem "C:\Program Files (x86)\Android\android-sdk\build-tools\") `
-           | Where { $_.Name -match "[0-9].*" } `
-           | Sort-Object -Descending `
-           | % { "#### $($_.Name)`n`n_Location:_ $($_.FullName)`n" }
-
-Add-ContentToMarkdown -Content $BuildTools
-
-
-# Adding description of the software to Markdown
-$Header = @"
-
-## Android SDK Platforms
-
-"@
-
-Add-ContentToMarkdown -Content $Header
-
-$SdkList =(Get-ChildItem "C:\Program Files (x86)\Android\android-sdk\platforms\") | Sort-Object -Descending | %{ $_.FullName }
-
-foreach($sdk in $SdkList)
-{
-    $sdkProps = ConvertFrom-StringData (Get-Content "$sdk\source.properties" -Raw)
-
-    $content = @"
-#### $($sdkProps.'Platform.Version') (API $($sdkProps.'AndroidVersion.ApiLevel'))
-
-_Location:_ $sdk
-
-"@
-    Add-ContentToMarkdown -Content $content
+$ndkLatestPath = "$sdkRoot\ndk\$ndkLatestVersion"
+if (Test-Path $ndkLatestPath) {
+    setx ANDROID_NDK_LATEST_HOME $ndkLatestPath /M
+} else {
+    Write-Host "Latest NDK $ndkLatestVersion is not installed at path $ndkLatestPath"
+    exit 1
 }
+
+Invoke-PesterTests -TestFile "Android"

@@ -1,32 +1,40 @@
-#!/bin/bash
+#!/bin/bash -e
 ################################################################################
 ##  File:  java-tools.sh
 ##  Desc:  Installs Java and related tooling (Ant, Gradle, Maven)
 ################################################################################
+source $HELPER_SCRIPTS/install.sh
+source $HELPER_SCRIPTS/os.sh
+source $HELPER_SCRIPTS/etc-environment.sh
 
-# Source the helpers for use with the script
-source $HELPER_SCRIPTS/document.sh
+JAVA_VERSIONS_LIST=$(get_toolset_value '.java.versions | .[]')
+DEFAULT_JDK_VERSION=$(get_toolset_value '.java.default')
 
-DEFAULT_JDK_VERSION=8
+# Install GPG Key for Adopt Open JDK. See https://adoptopenjdk.net/installation.html
+wget -qO - "https://adoptopenjdk.jfrog.io/adoptopenjdk/api/gpg/key/public" | apt-key add -
+add-apt-repository --yes https://adoptopenjdk.jfrog.io/adoptopenjdk/deb/
 
-set -e
+if isUbuntu16 || isUbuntu18 ; then
+    # Install GPG Key for Azul Open JDK. See https://www.azul.com/downloads/azure-only/zulu/
+    apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 0xB1998361219BD9C9
+    apt-add-repository "deb https://repos.azul.com/azure-only/zulu/apt stable main"
+fi
+apt-get update
 
-# Install the Azul Systems Zulu JDKs
-# See https://www.azul.com/downloads/azure-only/zulu/
-apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 0xB1998361219BD9C9
-apt-add-repository "deb http://repos.azul.com/azure-only/zulu/apt stable main"
-apt-get -q update
-apt-get -y install zulu-7-azure-jdk=\*
-apt-get -y install zulu-8-azure-jdk=\*
-apt-get -y install zulu-11-azure-jdk=\*
-apt-get -y install zulu-12-azure-jdk=\*
-update-java-alternatives -s /usr/lib/jvm/zulu-8-azure-amd64
-echo "JAVA_HOME_7_X64=/usr/lib/jvm/zulu-7-azure-amd64" | tee -a /etc/environment
-echo "JAVA_HOME_8_X64=/usr/lib/jvm/zulu-8-azure-amd64" | tee -a /etc/environment
-echo "JAVA_HOME_11_X64=/usr/lib/jvm/zulu-11-azure-amd64" | tee -a /etc/environment
-echo "JAVA_HOME_12_X64=/usr/lib/jvm/zulu-12-azure-amd64" | tee -a /etc/environment
-echo "JAVA_HOME=/usr/lib/jvm/zulu-${DEFAULT_JDK_VERSION}-azure-amd64" | tee -a /etc/environment
-echo "JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF8" | tee -a /etc/environment
+for JAVA_VERSION in ${JAVA_VERSIONS_LIST[@]}; do
+    apt-get -y install adoptopenjdk-$JAVA_VERSION-hotspot=\*
+    echo "JAVA_HOME_${JAVA_VERSION}_X64=/usr/lib/jvm/adoptopenjdk-${JAVA_VERSION}-hotspot-amd64" | tee -a /etc/environment
+done
+
+# Set Default Java version.
+if isUbuntu16; then
+    # issue: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=825987
+    # stackoverflow: https://askubuntu.com/questions/1187136/update-java-alternatives-only-java-but-not-javac-is-changed
+    sed -i 's/(hl|jre|jdk|plugin|DUMMY) /(hl|jre|jdk|jdkhl|plugin|DUMMY) /g' /usr/sbin/update-java-alternatives
+fi
+update-java-alternatives -s /usr/lib/jvm/adoptopenjdk-${DEFAULT_JDK_VERSION}-hotspot-amd64
+
+echo "JAVA_HOME=/usr/lib/jvm/adoptopenjdk-${DEFAULT_JDK_VERSION}-hotspot-amd64" | tee -a /etc/environment
 
 # Install Ant
 apt-fast install -y --no-install-recommends ant ant-optional
@@ -37,7 +45,6 @@ curl -sL https://www-eu.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-mave
 unzip -d /usr/share maven.zip
 rm maven.zip
 ln -s /usr/share/apache-maven-3.6.3/bin/mvn /usr/bin/mvn
-echo "M2_HOME=/usr/share/apache-maven-3.6.3" | tee -a /etc/environment
 
 # Install Gradle
 # This script downloads the latest HTML list of releases at https://gradle.org/releases/.
@@ -57,21 +64,5 @@ rm gradleLatest.zip
 ln -s /usr/share/gradle-"${gradleVersion}"/bin/gradle /usr/bin/gradle
 echo "GRADLE_HOME=/usr/share/gradle" | tee -a /etc/environment
 
-# Run tests to determine that the software installed as expected
-echo "Testing to make sure that script performed as expected, and basic scenarios work"
-for cmd in gradle java javac mvn ant; do
-    if ! command -v $cmd; then
-        echo "$cmd was not installed or found on path"
-        exit 1
-    fi
-done
-
-# Document what was added to the image
-echo "Lastly, documenting what we added to the metadata file"
-DocumentInstalledItem "Azul Zulu OpenJDK (7) ($(/usr/lib/jvm/zulu-7-azure-amd64/bin/java -showversion |& head -n 1))"
-DocumentInstalledItem "Azul Zulu OpenJDK (8) ($(/usr/lib/jvm/zulu-8-azure-amd64/bin/java -showversion |& head -n 1))"
-DocumentInstalledItem "Azul Zulu OpenJDK (11) ($(/usr/lib/jvm/zulu-11-azure-amd64/bin/java -showversion |& head -n 1))"
-DocumentInstalledItem "Azul Zulu OpenJDK (12) ($(/usr/lib/jvm/zulu-12-azure-amd64/bin/java -showversion |& head -n 1))"
-DocumentInstalledItem "Ant ($(ant -version))"
-DocumentInstalledItem "Gradle ${gradleVersion}"
-DocumentInstalledItem "Maven ($(mvn -version | head -n 1))"
+reloadEtcEnvironment
+invoke_tests "Java"

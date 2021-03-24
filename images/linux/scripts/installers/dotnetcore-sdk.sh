@@ -1,14 +1,16 @@
-#!/bin/bash
+#!/bin/bash -e
 ################################################################################
 ##  File:  dotnetcore-sdk.sh
 ##  Desc:  Installs .NET Core SDK
 ################################################################################
-source $HELPER_SCRIPTS/apt.sh
-source $HELPER_SCRIPTS/document.sh
 
-LATEST_DOTNET_PACKAGES=("dotnet-sdk-3.0" "dotnet-sdk-3.1")
+source $HELPER_SCRIPTS/etc-environment.sh
+source $HELPER_SCRIPTS/install.sh
+source $HELPER_SCRIPTS/os.sh
 
-LSB_RELEASE=$(lsb_release -rs)
+# Ubuntu 20 doesn't support EOL versions
+LATEST_DOTNET_PACKAGES=$(get_toolset_value '.dotnet.aptPackages[]')
+DOTNET_VERSIONS=$(get_toolset_value '.dotnet.versions[]')
 
 mksamples()
 {
@@ -16,8 +18,6 @@ mksamples()
     sample=$2
     mkdir "$sdk"
     cd "$sdk" || exit
-    set -e
-    dotnet help
     dotnet new globaljson --sdk-version "$sdk"
     dotnet new "$sample"
     dotnet restore
@@ -27,61 +27,53 @@ mksamples()
     rm -rf "$sdk"
 }
 
-set -e
-
 # Disable telemetry
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
 for latest_package in ${LATEST_DOTNET_PACKAGES[@]}; do
     echo "Determing if .NET Core ($latest_package) is installed"
-    if ! IsInstalled $latest_package; then
+    if ! IsPackageInstalled $latest_package; then
         echo "Could not find .NET Core ($latest_package), installing..."
-        #temporary avoid 3.1.102 installation due to https://github.com/dotnet/aspnetcore/issues/19133
-        if [ $latest_package != "dotnet-sdk-3.1" ]; then
-            apt-get install $latest_package -y
-        else
-            apt-get install dotnet-sdk-3.1=3.1.101-1 -y
-        fi
+        apt-get install $latest_package -y
     else
         echo ".NET Core ($latest_package) is already installed"
     fi
 done
 
 # Get list of all released SDKs from channels which are not end-of-life or preview
-release_urls=("https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/2.1/releases.json" "https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/2.2/releases.json" "https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/3.0/releases.json" "https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/3.1/releases.json")
 sdks=()
-for release_url in ${release_urls[@]}; do
-    echo "${release_url}"
-    releases=$(curl "${release_url}")
+for version in ${DOTNET_VERSIONS[@]}; do
+    release_url="https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/${version}/releases.json"
+    download_with_retries "${release_url}" "." "${version}.json"
+    releases=$(cat "./${version}.json")
     sdks=("${sdks[@]}" $(echo "${releases}" | jq '.releases[]' | jq '.sdk.version'))
     sdks=("${sdks[@]}" $(echo "${releases}" | jq '.releases[]' | jq '.sdks[]?' | jq '.version'))
+    rm ./${version}.json
 done
 
-#temporary avoid 3.1.102 installation due to https://github.com/dotnet/aspnetcore/issues/19133
-sortedSdks=$(echo ${sdks[@]} | tr ' ' '\n' | grep -v 3.1.102 | grep -v preview | grep -v rc | grep -v display | cut -d\" -f2 | sort -u -r)
+sortedSdks=$(echo ${sdks[@]} | tr ' ' '\n' | grep -v preview | grep -v rc | grep -v display | cut -d\" -f2 | sort -u -r)
+extract_dotnet_sdk() {
+    local ARCHIVE_NAME="$1"
+    set -e
+    dest="./tmp-$(basename -s .tar.gz $ARCHIVE_NAME)"
+    echo "Extracting $ARCHIVE_NAME to $dest"
+    mkdir "$dest" && tar -C "$dest" -xzf "$ARCHIVE_NAME"
+    rsync -qav --remove-source-files "$dest/shared/" /usr/share/dotnet/shared/
+    rsync -qav --remove-source-files "$dest/host/" /usr/share/dotnet/host/
+    rsync -qav --remove-source-files "$dest/sdk/" /usr/share/dotnet/sdk/
+    rm -rf "$dest" "$ARCHIVE_NAME"
+}
 
-for sdk in $sortedSdks; do
-    url="https://dotnetcli.blob.core.windows.net/dotnet/Sdk/$sdk/dotnet-sdk-$sdk-linux-x64.tar.gz"
-    echo "$url" >> urls
-    echo "Adding $url to list to download later"
-done
+# Download/install additional SDKs in parallel
+export -f download_with_retries
+export -f extract_dotnet_sdk
 
-# Download additional SDKs
-echo "Downloading release tarballs..."
-cat urls | xargs -n 1 -P 16 wget -q
-for tarball in *.tar.gz; do
-    dest="./tmp-$(basename -s .tar.gz $tarball)"
-    echo "Extracting $tarball to $dest"
-    mkdir "$dest" && tar -C "$dest" -xzf "$tarball"
-    rsync -qav "$dest/shared/" /usr/share/dotnet/shared/
-    rsync -qav "$dest/host/" /usr/share/dotnet/host/
-    rsync -qav "$dest/sdk/" /usr/share/dotnet/sdk/
-    rm -rf "$dest"
-    rm "$tarball"
-done
-rm urls
+parallel --jobs 0 --halt soon,fail=1 \
+    'url="https://dotnetcli.blob.core.windows.net/dotnet/Sdk/{}/dotnet-sdk-{}-linux-x64.tar.gz"; \
+    download_with_retries $url' ::: "${sortedSdks[@]}"
 
-DocumentInstalledItem ".NET Core SDK:"
+find . -name "*.tar.gz" | parallel --halt soon,fail=1 'extract_dotnet_sdk {}'
+
 # Smoke test each SDK
 for sdk in $sortedSdks; do
     mksamples "$sdk" "console"
@@ -90,10 +82,13 @@ for sdk in $sortedSdks; do
     mksamples "$sdk" "web"
     mksamples "$sdk" "mvc"
     mksamples "$sdk" "webapi"
-    DocumentInstalledItemIndent "$sdk"
 done
 
 # NuGetFallbackFolder at /usr/share/dotnet/sdk/NuGetFallbackFolder is warmed up by smoke test
 # Additional FTE will just copy to ~/.dotnet/NuGet which provides no benefit on a fungible machine
-echo "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1" | tee -a /etc/environment
-echo 'export PATH="$PATH:$HOME/.dotnet/tools"' | tee -a /etc/skel/.bashrc
+setEtcEnvironmentVariable DOTNET_SKIP_FIRST_TIME_EXPERIENCE 1
+setEtcEnvironmentVariable DOTNET_NOLOGO 1
+setEtcEnvironmentVariable DOTNET_MULTILEVEL_LOOKUP 0
+echo 'export PATH=$PATH:$HOME/.dotnet/tools' | tee -a /etc/profile.d/env_vars.sh
+
+invoke_tests "DotnetSDK"

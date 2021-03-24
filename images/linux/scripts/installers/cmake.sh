@@ -1,30 +1,21 @@
-#!/bin/bash
+#!/bin/bash -e
 ################################################################################
 ##  File:  cmake.sh
 ##  Desc:  Installs CMake
 ################################################################################
 
-# Source the helpers for use with the script
-source $HELPER_SCRIPTS/document.sh
-
 # Test to see if the software in question is already installed, if not install it
 echo "Checking to see if the installer script has already been run"
 if command -v cmake; then
-    echo "Example variable already set to $EXAMPLE_VAR"
+    echo "cmake is already installed"
 else
-	curl -sL https://cmake.org/files/v3.16/cmake-3.16.2-Linux-x86_64.sh -o cmakeinstall.sh \
+	json=$(curl -s "https://api.github.com/repos/Kitware/CMake/releases")
+	latest_tag=$(echo $json | jq -r '.[] | select(.prerelease==false).tag_name' | sort --unique --version-sort | grep -v "rc" | tail -1)
+	sh_url=$(echo $json | jq -r ".[] | select(.tag_name==\"${latest_tag}\").assets[].browser_download_url | select(endswith(\"inux-x86_64.sh\"))")
+	curl -sL ${sh_url} -o cmakeinstall.sh \
 	&& chmod +x cmakeinstall.sh \
 	&& ./cmakeinstall.sh --prefix=/usr/local --exclude-subdir \
 	&& rm cmakeinstall.sh
 fi
 
-# Run tests to determine that the software installed as expected
-echo "Testing to make sure that script performed as expected, and basic scenarios work"
-if ! command -v cmake; then
-    echo "cmake was not installed"
-    exit 1
-fi
-
-# Document what was added to the image
-echo "Lastly, documenting what we added to the metadata file"
-DocumentInstalledItem "CMake ($(cmake --version | head -n 1))"
+invoke_tests "Tools" "Cmake"

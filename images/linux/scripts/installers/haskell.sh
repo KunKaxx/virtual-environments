@@ -1,12 +1,18 @@
-#!/bin/bash
+#!/bin/bash -e
 ################################################################################
 ##  File:  haskell.sh
 ##  Desc:  Installs Haskell
 ################################################################################
 
 # Source the helpers for use with the script
-source $HELPER_SCRIPTS/document.sh
-source $HELPER_SCRIPTS/apt.sh
+source $HELPER_SCRIPTS/etc-environment.sh
+
+# Any nonzero value for noninteractive installation
+export BOOTSTRAP_HASKELL_NONINTERACTIVE=1
+export GHCUP_INSTALL_BASE_PREFIX=/usr/local
+export BOOTSTRAP_HASKELL_GHC_VERSION=0
+ghcup_bin=$GHCUP_INSTALL_BASE_PREFIX/.ghcup/bin
+setEtcEnvironmentVariable "BOOTSTRAP_HASKELL_NONINTERACTIVE" $BOOTSTRAP_HASKELL_NONINTERACTIVE
 
 # Install Herbert V. Riedel's PPA for managing multiple version of ghc on ubuntu.
 # https://launchpad.net/~hvr/+archive/ubuntu/ghc
@@ -14,53 +20,33 @@ apt-get install -y software-properties-common
 add-apt-repository -y ppa:hvr/ghc
 apt-get update
 
-# Install various versions of ghc and cabal
-apt-get install -y \
-    ghc-8.0.2 \
-    ghc-8.2.2 \
-    ghc-8.4.4 \
-    ghc-8.6.2 \
-    ghc-8.6.3 \
-    ghc-8.6.4 \
-    ghc-8.6.5 \
-    ghc-8.8.1 \
-    ghc-8.8.2 \
-    ghc-8.8.3 \
-    cabal-install-2.0 \
-    cabal-install-2.2 \
-    cabal-install-2.4 \
-    cabal-install-3.0
+# Install GHCup
+curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh > /dev/null 2>&1 || true
+export PATH="$ghcup_bin:$PATH"
+prependEtcEnvironmentPath $ghcup_bin
 
-# Install haskell stack, pinned to v2.1.3
-curl -sSL https://raw.githubusercontent.com/commercialhaskell/stack/v2.1.3/etc/scripts/get-stack.sh | sh
+# Get 2 latest Haskell Major.Minor versions
+allGhcVersions=$(apt-cache search "^ghc-" | grep -Po '(\d*\.){2}\d*' | sort --unique --version-sort)
+ghcMajorMinorVersions=$(echo "$allGhcVersions" | cut -d "." -f 1,2 | sort --unique --version-sort | tail -2)
 
-# Run tests to determine that the software installed as expected
-echo "Testing to make sure that script performed as expected, and basic scenarios work"
-# Check all ghc versions
-for version in 8.0.2 8.2.2 8.4.4 8.6.2 8.6.3 8.6.4 8.6.5 8.8.1 8.8.2 8.8.3; do
-    if ! command -v /opt/ghc/$version/bin/ghc; then
-        echo "ghc $version was not installed"
-        exit 1
-    fi
+# We are using apt-get to install ghc, not ghcup,
+# because ghc installed through ghcup takes up too much disk space (2GB versus 1GB through apt-get)
+for version in $ghcMajorMinorVersions; do
+    # Get latest patch version for given Major.Minor one (ex. 8.6.5 for 8.6) and install it
+    exactVersion=$(echo "$allGhcVersions" | grep $version | sort --unique --version-sort | tail -1)
+    apt-get install -y ghc-$exactVersion
+    ghcInstalledVersions+=("$exactVersion")
+    defaultGHCVersion=$exactVersion
 done
-# Check all cabal versions
-for version in 2.0 2.2 2.4 3.0; do
-    if ! command -v /opt/cabal/$version/bin/cabal; then
-        echo "cabal $version was not installed"
-        exit 1
-    fi
-done
-# Check stack
-if ! command -v stack; then
-    exit 1
-fi
 
-# Document what was added to the image
-echo "Lastly, documenting what we added to the metadata file"
-for version in 2.0 2.2 2.4 3.0; do
-    DocumentInstalledItem "Haskell Cabal ($(/opt/cabal/$version/bin/cabal --version))"
-done
-for version in 8.0.2 8.2.2 8.4.4 8.6.2 8.6.3 8.6.4 8.6.5 8.8.1 8.8.2 8.8.3; do
-    DocumentInstalledItem "GHC ($(/opt/ghc/$version/bin/ghc --version))"
-done
-DocumentInstalledItem "Haskell Stack ($(stack --version))"
+echo "install cabal..."
+ghcup install cabal
+
+chmod -R 777 $GHCUP_INSTALL_BASE_PREFIX/.ghcup
+ln -s $GHCUP_INSTALL_BASE_PREFIX/.ghcup /etc/skel/.ghcup
+ln -s "/opt/ghc/$defaultGHCVersion/bin/ghc" "/usr/bin/ghc"
+
+# Install the latest stable release of haskell stack
+curl -sSL https://get.haskellstack.org/ | sh
+
+invoke_tests "Haskell"
